@@ -79,8 +79,7 @@ impl Client {
     {
         unsafe
         {
-            let ptr = Box::into_raw(Box::new(self));
-            let ret = antd_send(ptr as *const c_void, buf.as_ptr() as *const c_void, buf.len() as u32);
+            let ret = antd_send((self as *const Client) as *const c_void, buf.as_ptr() as *const c_void, buf.len() as u32);
             if(ret >= 0)
             {
                 Ok(ret)
