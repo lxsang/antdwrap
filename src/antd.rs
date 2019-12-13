@@ -75,11 +75,20 @@ pub struct Client
 }
 
 impl Client {
-    pub fn print(&self)
+    pub fn write(&self, buf:&[u8]) -> Result<u32,u32>
     {
-        if let Ok(s) = cstr!(self.ip)
+        unsafe
         {
-            print!("sock {}, ip: {}\n", self.sock, s);
+            let ptr = Box::into_raw(Box::new(self));
+            let ret = antd_send(ptr as *const c_void, buf.as_ptr() as *const c_void, buf.len() as u32);
+            if(ret >= 0)
+            {
+                Ok(ret)
+            }
+            else
+            {
+                Err(ret)
+            }
         }
     }
 }
@@ -243,6 +252,8 @@ extern {
     ) -> *const c_void;
     fn server_log(fmt: *const c_char, msg:*const c_char) -> ();
     fn error_log(fmt: *const c_char, msg:*const c_char) -> ();
+    fn antd_send(source: *const c_void, data: *const c_void, len: u32) -> u32;
+    fn antd_recv(source: *const c_void,  data: *const c_void, len: u32) -> u32;
 }
 
 
