@@ -5,7 +5,7 @@ use std::os::raw::c_char;
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::collections::HashMap;
-use std::fmt::{Arguments,Error,Write};
+use std::fmt::{Arguments,Write};
 
 const DHASHSIZE: usize = 50;
 
