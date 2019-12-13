@@ -269,6 +269,7 @@ extern {
     fn error_log(fmt: *const c_char, msg:*const c_char) -> ();
     fn antd_send(source: *const c_void, data: *const c_void, len: u32) -> u32;
     fn antd_recv(source: *const c_void,  data: *const c_void, len: u32) -> u32;
+    fn init() -> ();
 }
 
 
@@ -438,7 +439,9 @@ pub fn is_raw<'a>() -> bool
 pub extern  fn __init_plugin__(ptr:*const c_char, config: *const Config)
 {
     __(ptr, config);
-
+    unsafe{
+        init();
+    }
 }
 
 #[no_mangle]
