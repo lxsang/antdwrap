@@ -5,7 +5,7 @@ authors = ["lxsang <xsang.le@gmail.com>"]
 edition = "2018"
 
 [lib]
-crate_type = ["cdylib"]
+crate_type = ["staticlib"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
