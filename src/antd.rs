@@ -90,6 +90,22 @@ impl Client {
             }
         }
     }
+
+    pub fn read(&self, buf:&[u8]) -> Result<u32,u32>
+    {
+        unsafe
+        {
+            let ret = antd_recv((self as *const Client) as *const c_void, buf.as_ptr() as *const c_void, buf.len() as u32);
+            if(ret >= 0)
+            {
+                Ok(ret)
+            }
+            else
+            {
+                Err(ret)
+            }
+        }
+    }
 }
 
 //#[derive(Copy, Clone)]
