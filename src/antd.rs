@@ -74,39 +74,8 @@ pub struct Client
     last_io: libc::time_t
 }
 
-impl Client {
-    pub fn write(&self, buf:&[u8]) -> Result<u32,u32>
-    {
-        unsafe
-        {
-            let ret = antd_send((self as *const Client) as *const c_void, buf.as_ptr() as *const c_void, buf.len() as u32);
-            if(ret >= 0)
-            {
-                Ok(ret)
-            }
-            else
-            {
-                Err(ret)
-            }
-        }
-    }
-
-    pub fn read(&self, buf:&[u8]) -> Result<u32,u32>
-    {
-        unsafe
-        {
-            let ret = antd_recv((self as *const Client) as *const c_void, buf.as_ptr() as *const c_void, buf.len() as u32);
-            if(ret >= 0)
-            {
-                Ok(ret)
-            }
-            else
-            {
-                Err(ret)
-            }
-        }
-    }
-}
+//impl Client {
+//}
 
 //#[derive(Copy, Clone)]
 #[repr(C)]
@@ -141,26 +110,76 @@ pub struct Request
     data: Dictionary
 }
 
-impl<'a> Request {
-
-    pub fn from(rq:*const Request) -> &'a Request
-    {
-        unsafe
-        {
-            &*rq
-        }
-    }
+impl Request {
 
     pub fn get_data(&self) -> RequestData
     {
         RequestData::from(&self)
     }
 
-    pub fn get_client(&self) -> &'a Client
+    fn get_client(&self) -> *const Client
+    {
+       self.client
+    }
+
+    pub fn read(&self, buf:&[u8]) -> Result<u32,u32>
     {
         unsafe
         {
-            &*self.client
+            let ret = antd_recv(self.client as *const c_void, buf.as_ptr() as *const c_void, buf.len() as u32);
+            if ret >= 0
+            {
+                Ok(ret)
+            }
+            else
+            {
+                Err(ret)
+            }
+        }
+    }
+}
+
+pub struct Cookie<'a>
+{
+    value: &'a str,
+    path: &'a str,
+    lifetime: &'a str
+}
+
+#[repr(C)]
+pub struct Response<'a>
+{
+    cookie: HashMap<&'a str, &'a Cookie<'a>>,
+    header: HashMap<&'a str, &'a str>,
+    client: *const Client,
+    status: u32,
+    hflag:bool
+}
+
+impl<'a> Response<'a> {
+    fn from(client:*const Client) -> Response<'a>
+    {
+        Response {
+            cookie:HashMap::new(),
+            header:HashMap::new(),
+            client:client,
+            status: 200,
+            hflag: false
+        }
+    }
+    pub fn write(&self, buf:&[u8]) -> Result<u32,u32>
+    {
+        unsafe
+        {
+            let ret = antd_send(self.client as *const c_void, buf.as_ptr() as *const c_void, buf.len() as u32);
+            if ret >= 0
+            {
+                Ok(ret)
+            }
+            else
+            {
+                Err(ret)
+            }
         }
     }
 }
@@ -252,6 +271,7 @@ impl<'a> RequestData<'a> {
     }
 }
 
+#[repr(C)]
 pub struct Task
 {
     ptr: *const c_void
@@ -270,8 +290,17 @@ extern {
     fn antd_send(source: *const c_void, data: *const c_void, len: u32) -> u32;
     fn antd_recv(source: *const c_void,  data: *const c_void, len: u32) -> u32;
     fn init() -> ();
+    fn process(request: &Request, response: &Response) -> Task;
 }
 
+#[no_mangle]
+pub unsafe extern fn handle(ptr: *const Request) -> *const c_void
+{
+    let request = &*ptr;
+    let response = Response::from(request.get_client());
+    let task = process(&request, &response);
+    task.get_ptr()
+}
 
 
 pub fn log(prefix:&str, error:bool, args: Arguments<'_>)  {
