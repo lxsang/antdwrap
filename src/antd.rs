@@ -1,13 +1,14 @@
 
 extern crate libc;
+use std::io::prelude::*;
 pub use std::ffi::c_void;
 use std::os::raw::c_char;
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::collections::HashMap;
 use std::fmt::{Arguments,Write};
-
-const DHASHSIZE: usize = 50;
+use std::fs::File;
+use std::io::BufReader;
 
 static mut __PLUGIN__: PluginHeader = PluginHeader{
     name: std::ptr::null(),
@@ -100,14 +101,20 @@ impl Pair {
 }
 
 type PairList = *const Pair;
-type Dictionary = *const PairList;
+#[repr(C)]
+pub struct Dictionary
+{
+    cap: u32,
+    map: *const PairList,
+    size: u32
+}
 
 
 #[repr(C)]
 pub struct Request
 {
     client: *const Client,
-    data: Dictionary
+    data: *const Dictionary
 }
 
 impl Request {
@@ -122,7 +129,7 @@ impl Request {
        self.client
     }
 
-    pub fn read(&self, buf:&[u8]) -> Result<u32,u32>
+    pub fn read(&self, buf:&[u8]) -> Result<i32,i32>
     {
         unsafe
         {
@@ -139,35 +146,99 @@ impl Request {
     }
 }
 
-pub struct Cookie<'a>
+#[repr(C)]
+pub struct WSHeader
 {
-    value: &'a str,
-    path: &'a str,
-    lifetime: &'a str
+    fin: u8,
+    opcode: u8,
+    plen: u32,
+    mask: u8,
+    mask_key: [u8;4]
 }
 
+
 #[repr(C)]
-pub struct Response<'a>
+pub struct Response
 {
-    cookie: HashMap<&'a str, &'a Cookie<'a>>,
-    header: HashMap<&'a str, &'a str>,
+    cookie: Vec<String>,
+    header: HashMap<String, String>,
     client: *const Client,
-    status: u32,
+    status: i32,
     hflag:bool
 }
 
-impl<'a> Response<'a> {
-    fn from(client:*const Client) -> Response<'a>
+impl Response{
+    fn from(client:*const Client) -> Response
     {
+        let mut header = HashMap::new();
+        header.insert(String::from("Server"),String::from("Antd"));
         Response {
-            cookie:HashMap::new(),
-            header:HashMap::new(),
+            cookie:Vec::new(),
+            header: header,
             client:client,
             status: 200,
             hflag: false
         }
     }
-    pub fn write(&self, buf:&[u8]) -> Result<u32,u32>
+
+    pub fn set_status(&mut self, v:i32) 
+    {
+        self.status = v;
+    }
+
+    pub fn set_header(&mut self, k: & str, v: & str)
+    {
+        self.header.insert(String::from(k),String::from(v));
+    }
+
+    pub fn set_cookie(&mut self,v:& str)
+    {
+        self.cookie.push(String::from(v));
+    }
+
+    fn set_flag(&mut self, v: bool)
+    {
+        self.hflag = v;
+    }
+
+    pub fn send_header(&self) -> Result <i32,String>
+    {
+        let mut buf: String;
+        if let Ok(s) = cstr!(get_status_str(self.status))
+        {
+            buf = format!("HTTP/1.1 {} {}\r\n", self.status, s);
+        }
+        else
+        {
+            buf = format!("HTTP/1.1 {} {}\r\n", self.status, "Unofficial Status");
+        }
+        self.send(buf.as_bytes())?;
+        // write header
+        for (k,v) in self.header.iter()
+        {
+            buf = format!("{}: {}\r\n",k, v);
+            self.send(buf.as_bytes())?;
+        }
+        // write cookie
+        for v in self.cookie.iter()
+        {
+            buf = format!("Set-Cookie: {}\r\n",v);
+            self.send(buf.as_bytes())?;
+        }
+        // write end
+        self.send(b"\r\n\r\n" as &[u8])?;
+        Ok(1)
+    }
+    pub fn write(&mut self, buf:&[u8]) -> Result<i32,String>
+    {
+        if !self.hflag 
+        {
+            self.send_header()?;
+            self.set_flag(true);
+        }
+        self.send(buf)
+    }
+    pub fn send(&self, buf:&[u8]) -> Result<i32,String>
     {
         unsafe
         {
@@ -178,10 +249,34 @@ impl<'a> Response<'a> {
             }
             else
             {
-                Err(ret)
+                Err(format!("Error when write out data: {}",ret))
             }
         }
     }
+}
+
+
+pub fn read_config(file: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    if let Ok(f) = File::open(file) {
+        let buf = BufReader::new(f);
+        for result in buf.lines() {
+            if let Ok(line) = result {
+                let str = line.trim();
+                if let Some(ch) = str.chars().next() {
+                    if ch != '#' {
+                        if let Some(i) = str.find('=') {
+                            map.insert(
+                                String::from(str[..i - 1].trim()),
+                                String::from(str[i + 1..].trim()),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    map
 }
 
 pub struct RequestData<'a>
@@ -191,12 +286,12 @@ pub struct RequestData<'a>
     data: HashMap<&'a str, &'a str>
 }
 
-pub unsafe fn dict_to_map(dict:Dictionary, map: &mut HashMap<&str, &str>)
+pub unsafe fn dict_to_map(dict:*const Dictionary, map: &mut HashMap<&str, &str>)
 {
-    if dict != std::ptr::null()
+    if (*dict).map != std::ptr::null()
     {
-        for i in 0..DHASHSIZE {
-            let list: PairList = *(dict.offset(i as isize));
+        for i in 0..(*dict).cap {
+            let list: PairList = *((*dict).map.offset(i as isize));
             if list != std::ptr::null()
             {
                 let mut handle = |k,v|
@@ -222,10 +317,10 @@ impl<'a> RequestData<'a> {
             let mut data:HashMap<&str, &str> = HashMap::new();
             let mut cookie:HashMap<&str, &str> = HashMap::new();
             let mut header:HashMap<&str, &str> = HashMap::new();
-            if request.data != std::ptr::null()
+            if (*request.data).map != std::ptr::null()
             {
-                for i in 0..DHASHSIZE {
-                    let list: PairList = *(request.data.offset(i as isize));
+                for i in 0..(*request.data).cap {
+                    let list: PairList = *((*request.data).map.offset(i as isize));
                     if list != std::ptr::null()
                     {
                         let mut handle = |k,v|
@@ -233,9 +328,9 @@ impl<'a> RequestData<'a> {
                             if let Ok(ks) = cstr!(k)
                             {
                                 let _ = match ks {
-                                    "COOKIE" => dict_to_map(v as Dictionary, & mut cookie),
-                                    "REQUEST_HEADER" => dict_to_map(v as Dictionary, & mut header),
-                                    "REQUEST_DATA" =>  dict_to_map(v as Dictionary, & mut data),
+                                    "COOKIE" => dict_to_map(v as *const Dictionary, & mut cookie),
+                                    "REQUEST_HEADER" => dict_to_map(v as *const Dictionary, & mut header),
+                                    "REQUEST_DATA" =>  dict_to_map(v as *const Dictionary, & mut data),
                                     _ => {
                                         if let Ok(vs) = cstr!(v as *const c_char)
                                         {
@@ -287,18 +382,27 @@ extern {
     ) -> *const c_void;
     fn server_log(fmt: *const c_char, msg:*const c_char) -> ();
     fn error_log(fmt: *const c_char, msg:*const c_char) -> ();
-    fn antd_send(source: *const c_void, data: *const c_void, len: u32) -> u32;
-    fn antd_recv(source: *const c_void,  data: *const c_void, len: u32) -> u32;
+    fn antd_send(source: *const c_void, data: *const c_void, len: u32) -> i32;
+    fn antd_recv(source: *const c_void,  data: *const c_void, len: u32) -> i32;
     fn init() -> ();
-    fn process(request: &Request, response: &Response) -> Task;
+    fn process(request: &Request, response: &mut Response) -> Task;
+    fn antd_error(client:*const c_void, stat: i32, msg: *const c_char) -> ();
+    fn get_status_str(stat: i32) -> *const c_char;
+    // websocket
+    fn ws_read_header(client:*const c_void) -> *const WSHeader;
+    fn ws_send_text(client: *const c_void, data: *const c_char,mask: i32) -> ();
+    fn ws_send_file(client: *const c_void, data: *const c_char,mask: i32) -> ();
+    fn ws_send_binary(client:*const c_void, data: *const u8,mask:i32)->();
+    fn ws_send_close(client:*const c_void, stat:u32,mask:i32)->();
+    fn ws_read_data(client:*const c_void, header:*const WSHeader, size:i32, data:*const u8) -> i32;
 }
 
 #[no_mangle]
 pub unsafe extern fn handle(ptr: *const Request) -> *const c_void
 {
     let request = &*ptr;
-    let response = Response::from(request.get_client());
-    let task = process(&request, &response);
+    let mut response = Response::from(request.get_client());
+    let task = process(&request, &mut response);
     task.get_ptr()
 }
 
