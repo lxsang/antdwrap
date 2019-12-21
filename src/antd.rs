@@ -62,6 +62,7 @@ pub struct Config
     maxcon: u32,
     connection: u32,
     n_workers: u32,
+    max_upload_size: u32,
     errorfp: *const c_void,
     logfp: * const c_void,
     enable_ssl: u32,
